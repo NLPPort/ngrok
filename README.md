@@ -21,6 +21,8 @@ ngrok http 8080
 
 This module uses node>=8.3.0 with async-await. For callback-based version use [2.3.0](https://github.com/bubenshchykov/ngrok/blob/330674233e3ec77688bb692bf1eb007810c4e30d/README.md)
 
+For global install on Linux, you might need to run ```sudo npm install --unsafe-perm -g ngrok``` due to the [nature](https://github.com/bubenshchykov/ngrok/issues/115#issuecomment-380927124) of npm postinstall script.
+
 ## authtoken
 You can create basic http-https-tcp tunnel without [authtoken](https://ngrok.com/docs#authtoken). For custom subdomains and more you should  obtain authtoken by signing up at [ngrok.com](https://ngrok.com). Once you set it, it's stored in ngrok config and used for all tunnels. Few ways:
 
@@ -41,13 +43,15 @@ const url = await ngrok.connect(opts);
 ```javascript
 const url = await ngrok.connect({
 	proto: 'http', // http|tcp|tls, defaults to http
-	addr: 8080, // port or network address, defaultst to 80
+	addr: 8080, // port or network address, defaults to 80
 	auth: 'user:pwd', // http basic authentication for tunnel
 	subdomain: 'alex', // reserved tunnel name https://alex.ngrok.io
 	authtoken: '12345', // your authtoken from ngrok.com
-	region: 'us', // one of ngrok regions (us, eu, au, ap), defaults to us
-	configPath: '~/git/project/ngrok.yml' // custom path for ngrok config file
-	binPath: default => default.replace('/bin', '.unpacked/bin'); // custom binary path, eg for prod in electron
+	region: 'us', // one of ngrok regions (us, eu, au, ap, sa, jp, in), defaults to us
+	configPath: '~/git/project/ngrok.yml', // custom path for ngrok config file
+	binPath: path => path.replace('app.asar', 'app.asar.unpacked'), // custom binary path, eg for prod in electron
+	onStatusChange: status => {}, // 'closed' - connection is lost, 'connected' - reconnected
+	onLogEvent: data => {}, // returns stdout messages from ngrok process
 });
 ```
 
@@ -82,11 +86,28 @@ const url = await ngrok.connect();
 const api = ngrok.getApi();
 const tunnels = await api.get('api/tunnels');
 ```
+You can also get it as string url
+```javascript
+const url = await ngrok.connect();
+const apiUrl = ngrok.getUrl();
+```
+
+## proxy
+- If you are behind a corporate proxy an have issues installing ngrok, you can set ```HTTP_PROXY``` or ```HTTPS_PROXY``` env var to fix it. Ngrok's postinstall uses request module to fetch the binary, [and request supports these env vars](https://github.com/request/request#controlling-proxy-behaviour-using-environment-variables)
+- If you are using a CA file, set the path in the environment variable `NGROK_ROOT_CA_PATH`. The path is needed for downloading the ngrok binary in the postinstall script.
 
 ## how it works
 ```npm install``` downloads ngrok binary for your platform from official ngrok hosting. To host binaries yourself set NGROK_CDN_URL env var before installing ngrok. To force specific platform set NGROK_ARCH, eg NGROK_ARCH=freebsdia32
 
 First time you create tunnel ngrok process is spawned and runs until you disconnect or when parent process killed. All further tunnels are created or stopped by using internal ngrok api which usually runs on http://127.0.0.1:4040
+
+## ngrok binary update
+If you would like to force an update of the ngrok binary directly from your software, you can require the `ngrok/download` module and call the `downloadNgrok` function directly:
+
+```javascript
+const downloadNgrok = require('ngrok/download');
+downloadNgrok(myCallbackFunc, { ignoreCache: true });
+```
 
 ## contributors
 Please run ```git update-index --assume-unchanged bin/ngrok``` to not override [ngrok stub](https://github.com/bubenshchykov/ngrok/blob/master/bin/ngrok) in your pr. Unfortunately it can't be gitignored.

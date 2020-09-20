@@ -1,7 +1,9 @@
-const { spawn } = require('child_process');
-const path = require('path');
+const { promisify } = require("util")
+const { spawn, exec: execCallback } = require('child_process');
+const exec = promisify(execCallback);
 const platform = require('os').platform();
 
+const defaultDir = __dirname + '/bin';
 const bin = './ngrok' + (platform === 'win32' ? '.exe' : '');
 const ready = /starting web service.*addr=(\d+\.\d+\.\d+\.\d+:\d+)/;
 const inUse = /address already in use/;
@@ -10,12 +12,12 @@ let processPromise, activeProcess;
 
 /*
 	ngrok process runs internal ngrok api
-	and should be spawned only ONCE 
+	and should be spawned only ONCE
 	(respawn allowed if it fails or .kill method called)
 */
 
 async function getProcess(opts) {
-	if (processPromise) return processPromise; 
+	if (processPromise) return processPromise;
 	try {
 		processPromise = startProcess(opts);
 		return await processPromise;
@@ -27,16 +29,16 @@ async function getProcess(opts) {
 }
 
 async function startProcess (opts) {
-	let dir = __dirname + '/bin';
+	let dir = defaultDir;
 	const start = ['start', '--none', '--log=stdout'];
 	if (opts.region) start.push('--region=' + opts.region);
 	if (opts.configPath) start.push('--config=' + opts.configPath);
 	if (opts.binPath) dir = opts.binPath(dir);
-	
-	const ngrok = spawn(bin, start, {cwd: dir})
-	
+
+	const ngrok = spawn(bin, start, {cwd: dir});
+
 	let resolve, reject;
-	const apiUrl = new Promise((res, rej) => {   
+	const apiUrl = new Promise((res, rej) => {
 		resolve = res;
 		reject = rej;
 	});
@@ -44,12 +46,22 @@ async function startProcess (opts) {
 	ngrok.stdout.on('data', data => {
 		const msg = data.toString();
 		const addr = msg.match(ready);
+		if (opts.onLogEvent) {
+			opts.onLogEvent(msg.trim());
+		}
+		if (opts.onStatusChange) {
+			if (msg.match('client session established')) {
+				opts.onStatusChange('connected');
+			} else if (msg.match('session closed, starting reconnect loop')) {
+				opts.onStatusChange('closed');
+			}
+		}
 		if (addr) {
 			resolve(`http://${addr[1]}`);
 		} else if (msg.match(inUse)) {
 			reject(new Error(msg.substring(0, 10000)));
 		}
-	});  
+	});
 
 	ngrok.stderr.on('data', data => {
 		const msg = data.toString().substring(0, 10000);
@@ -66,14 +78,17 @@ async function startProcess (opts) {
 	try {
 		const url = await apiUrl;
 		activeProcess = ngrok;
-		return url;      
+		return url;
 	}
 	catch(ex) {
 		ngrok.kill();
 		throw ex;
 	}
 	finally {
-		ngrok.stdout.removeAllListeners('data');
+		// Remove the stdout listeners if nobody is interested in the content.
+		if (!opts.onLogEvent && !opts.onStatusChange) {
+			ngrok.stdout.removeAllListeners('data');
+		}
 		ngrok.stderr.removeAllListeners('data');
 	}
 }
@@ -86,11 +101,19 @@ function killProcess ()  {
 	});
 }
 
-async function setAuthtoken (token, configPath) {
-	const authtoken = ['authtoken', token];
-	if (configPath) authtoken.push('--config=' + configPath);
+/**
+ * @param {string | INgrokOptions} optsOrToken
+ */
+async function setAuthtoken (optsOrToken) {
+	const isOpts = typeof optsOrToken !== 'string'
+	const opts = isOpts ? optsOrToken : {}
+	const token = isOpts ? opts.authtoken : optsOrToken
 
-	let dir = __dirname + '/bin';
+	const authtoken = ['authtoken', token];
+	if (opts.configPath) authtoken.push('--config=' + opts.configPath);
+
+	let dir = defaultDir;
+	if (opts.binPath) dir = opts.binPath(dir)
 	const ngrok = spawn(bin, authtoken, {cwd: dir});
 
 	const killed = new Promise((resolve, reject) => {
@@ -106,8 +129,19 @@ async function setAuthtoken (token, configPath) {
 	}
 }
 
+/**
+ * @param {INgrokOptions | undefined} opts
+ */
+async function getVersion(opts = {}) {
+	let dir = defaultDir;
+	if (opts.binPath) dir = opts.binPath(dir);
+	const { stdout } = await exec(`${bin} --version`, { cwd: dir });
+	return stdout.replace('ngrok version', '').trim();
+}
+
 module.exports = {
 	getProcess,
 	killProcess,
-	setAuthtoken
+	setAuthtoken,
+	getVersion
 };
